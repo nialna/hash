@@ -7,6 +7,7 @@
 use std::{borrow::Cow, sync::Arc};
 
 use arrow::{array, array::ArrayRef, datatypes::DataType};
+use tracing::field::debug;
 
 use super::{
     boolean::Column as BooleanColumn, change::ArrayChange, flush::GrowableBatch, ArrowBatch,
@@ -50,10 +51,13 @@ pub struct Batch {
     /// `self.flush_changes()` call, which inserts them into
     /// `self.memory`
     pub changes: Vec<ArrayChange>,
-    pub metaversion: Metaversion,
     /// Affinity describes the possible distribution of batches
     /// if multiple workers are used
     pub affinity: usize,
+    /// Currently loaded version of batch
+    loaded: Metaversion,
+    /// Latest known version of batch
+    latest_known: Metaversion,
 }
 
 impl BatchRepr for Batch {
@@ -65,29 +69,53 @@ impl BatchRepr for Batch {
         &mut self.memory
     }
 
-    fn metaversion(&self) -> &Metaversion {
-        &self.metaversion
+    fn loaded(&self) -> &Metaversion {
+        &self.loaded
     }
 
-    fn metaversion_mut(&mut self) -> &mut Metaversion {
-        &mut self.metaversion
+    fn latest_known(&self) -> &Metaversion {
+        &self.latest_known
     }
 
-    fn maybe_reload(&mut self, state: Metaversion) -> Result<()> {
-        if self.metaversion.memory() != state.memory() {
-            self.reload()?;
-        } else if self.metaversion.batch() != state.batch() {
+    fn update_latest_known(&mut self, new_version: &Metaversion) {
+        self.latest_known.maybe_update(new_version);
+    }
+
+    fn load_latest_known(&mut self) -> Result<()> {
+        if self.loaded.memory() < self.latest_known.memory() {
+            /// Reload the memory (for when ftruncate has been called) and batch
+            self.memory.reload()?;
             self.reload_record_batch_and_dynamic_meta()?;
+        } else if self.loaded.batch() < self.latest_known.batch() {
+            self.reload_record_batch_and_dynamic_meta()?;
+        } else {
+            // Loaded version can't be newer than latest known.
+            debug_assert_eq!(self.loaded, self.latest_known);
+            return Ok(());
         }
 
-        self.metaversion = state;
-        Ok(())
-    }
-
-    /// Reload the memory (for when ftruncate has been called) and batch
-    fn reload(&mut self) -> Result<()> {
-        self.memory.reload()?;
-        self.reload_record_batch_and_dynamic_meta()
+        let previously_loaded = self.loaded;
+        self.loaded = self.memory.get_metaversion()?;
+        if self.loaded.older_than(&self.latest_known) {
+            // The data that is currently persisted in memory is
+            // older than our latest known data. This either means that
+            // the previously loaded data, though older than the latest
+            // known, was already newer than the persisted data (i.e.
+            // we loaded older data than we already had), or that
+            // we have pending changes to flush, so the latest known
+            // version is the version of the changes, but that can't be
+            // loaded from memory yet -- we can only get it by loading
+            // after flushing.
+            Err(Error::from(format!(
+                "The agent batch was loaded, but the persisted data was older than the latest known: {:?}, {:?}, {:?}",
+                previously_loaded,
+                self.loaded,
+                self.latest_known,
+            )))
+        } else {
+            self.latest_known = self.loaded;
+            Ok(())
+        }
     }
 }
 
@@ -113,23 +141,27 @@ impl DynamicBatch for Batch {
     /// Push an `ArrayChange` into pending list of changes
     /// NB: These changes are not written into memory if
     /// `self.flush_changes` is not called.
-    fn push_change(&mut self, change: ArrayChange) -> Result<()> {
+    fn push_change(&mut self, change: ArrayChange, change_version: &Metaversion) -> Result<()> {
+        if change_version.older_than(&self.latest_known) {
+            return Err(Error::from("Tried to push agent batch change with outdated data"));
+        }
+
+        self.latest_known = *change_version;
         self.changes.push(change);
         Ok(())
     }
 
     fn flush_changes(&mut self) -> Result<()> {
-        let resized = GrowableBatch::flush_changes(self)?;
+        // Due to `push_changes` logic, changes version is latest known. However,
+        // flushed version can differ from changes version due to memory resizing
+        // during flush.
+        let flushed_version = GrowableBatch::flush_changes(self, self.latest_known)?;
+        debug_assert!(!flushed_version.older_than(&self.latest_known));
+        self.latest_known = flushed_version;
 
-        // The current `self.batch` is invalid because offset have been changed.
-        // need to reload, if we want to keep on using this shared batch instance
-        self.reload_record_batch_and_dynamic_meta()?;
-        // Update reload state (metaversion)
-        if resized {
-            self.metaversion.increment();
-        } else {
-            self.metaversion.increment_batch();
-        }
+        // The current `self.batch` is invalid because offsets have been changed.
+        // We need to reload it if we want to keep using this shared batch instance.
+        debug_assert!(self.loaded.older_than(&self.latest_known));
         Ok(())
     }
 }
@@ -152,7 +184,11 @@ impl Batch {
         self.dynamic_meta = dynamic_meta.clone();
         let meta_buffer = get_dynamic_meta_flatbuffers(dynamic_meta)?;
         self.memory.set_metadata(&meta_buffer)?;
-        self.metaversion.increment_batch();
+
+        self.latest_known.increment_batch();
+        let persisted_version = self.memory.get_metaversion()?;
+        debug_assert!(self.latest_known.newer_than(&persisted_version));
+        self.memory.set_metaversion(&self.latest_known)?;
         Ok(())
     }
 
@@ -172,9 +208,7 @@ impl Batch {
         experiment_id: &ExperimentId,
     ) -> Result<Batch> {
         let schema_buffer = schema_to_bytes(&schema.arrow);
-
-        let header_buffer = vec![]; // Nothing here
-
+        let header_buffer = Metaversion::new(0, 0)?.to_le_bytes();
         let (meta_buffer, data_len) = simulate_record_batch_to_bytes(record_batch);
 
         let mut memory = Memory::from_sizes(
@@ -202,6 +236,8 @@ impl Batch {
         schema: Option<&AgentSchema>,
         affinity: Option<usize>,
     ) -> Result<Batch> {
+        let metaversion = memory.get_metaversion()?;
+
         let (schema_buffer, _header_buffer, meta_buffer, data_buffer) =
             memory.get_batch_buffers()?;
         let (schema, static_meta) = if let Some(s) = schema {
@@ -228,13 +264,14 @@ impl Batch {
             Err(e) => return Err(Error::from(e)),
         };
 
-        Ok(Batch {
+        Ok(Self {
             memory,
             batch,
             dynamic_meta,
             static_meta,
             changes: vec![],
-            metaversion: Metaversion::default(),
+            loaded: metaversion,
+            latest_known: metaversion,
             affinity: affinity.unwrap_or(0),
         })
     }
@@ -245,7 +282,7 @@ impl Batch {
         experiment_id: &ExperimentId,
     ) -> Result<Memory> {
         let schema_buffer = schema_to_bytes(&schema.arrow);
-        let header_buffer = vec![];
+        let header_buffer = Metaversion::new(0, 0)?.to_le_bytes();
         let meta_buffer = get_dynamic_meta_flatbuffers(dynamic_meta)?;
 
         let mut memory = Memory::from_sizes(
@@ -260,10 +297,10 @@ impl Batch {
         if memory.set_header(&header_buffer)?.resized()
             || memory.set_metadata(&meta_buffer)?.resized()
         {
-            return Err(Error::UnexpectedAgentBatchMemoryResize);
+            Err(Error::UnexpectedAgentBatchMemoryResize)
+        } else {
+            Ok(memory)
         }
-
-        Ok(memory)
     }
 
     pub fn num_agents(&self) -> usize {

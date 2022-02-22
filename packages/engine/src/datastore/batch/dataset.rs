@@ -5,7 +5,7 @@ use crate::{
 
 pub struct Batch {
     pub(crate) memory: Memory,
-    pub(crate) reload_state: Metaversion,
+    loaded: Metaversion,
 }
 
 impl super::Batch for Batch {
@@ -17,26 +17,20 @@ impl super::Batch for Batch {
         &mut self.memory
     }
 
-    fn metaversion(&self) -> &Metaversion {
-        &self.reload_state
+    fn loaded(&self) -> &Metaversion {
+        &self.loaded
     }
 
-    fn metaversion_mut(&mut self) -> &mut Metaversion {
-        &mut self.reload_state
+    fn latest_known(&self) -> &Metaversion {
+        &self.loaded // Since the latest known version can't be updated for datasets
     }
 
-    fn maybe_reload(&mut self, _reload_state: Metaversion) -> Result<()> {
-        // TODO: ret these errors
-        // Error::from("Datasets are not updated");
-        tracing::error!("Datasets are not updated");
-        Ok(())
+    fn update_latest_known(&mut self, _new_version: &Metaversion) {
+        panic!("`update_latest_known` is not implemented for context batch")
     }
 
-    fn reload(&mut self) -> Result<()> {
-        // TODO: ret these errors
-        // Error::from("Datasets are not updated");
-        tracing::error!("Datasets are not updated");
-        Ok(())
+    fn load_latest_known(&mut self) -> Result<()> {
+        Err(Error::from("`load_latest_known` is not implemented for context batch"))
     }
 }
 

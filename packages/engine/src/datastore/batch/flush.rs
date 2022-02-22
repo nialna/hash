@@ -25,10 +25,18 @@ pub trait GrowableBatch<C: GrowableColumn<D>, D: GrowableArrayData> {
     fn mut_dynamic_meta(&mut self) -> &mut DynamicMeta;
     fn memory(&self) -> &Memory;
     fn mut_memory(&mut self) -> &mut Memory;
-    /// All changes that have been added into `self.changes` are commited into memory.
+
+    /// All changes that have been added into `self.changes` are committed into memory.
     /// Calculates all moves, copies and resizes required to commit the changes.
     #[allow(clippy::too_many_lines)]
-    fn flush_changes(&mut self) -> Result<bool> {
+    fn flush_changes(&mut self, change_version: Metaversion) -> Result<Metaversion> {
+        let old_version = self.memory().get_metaversion()?;
+        if !old_version.older_than(&change_version) {
+            return Err(Error::from(
+                "Tried to flush changes older than or equal to already written data: {old_version:?}, {change_version:?}"
+            ));
+        }
+
         let mut changes = self.take_changes();
         // Sort the changes by the order in which the columns are
         changes.sort_by_key(|a| a.get_column_index());
@@ -238,8 +246,18 @@ pub trait GrowableBatch<C: GrowableColumn<D>, D: GrowableArrayData> {
         self.mut_memory().set_data_length(new_data_length)?;
         let meta_buffer = get_dynamic_meta_flatbuffers(self.dynamic_meta())?;
         self.mut_memory().set_metadata(&meta_buffer)?;
+
+        let flushed_version = if change.resized() {
+            let mut m = change_version;
+            m.increment(); // Memory must be reloaded (along with batch)
+            m
+        } else {
+            change_version
+        };
+        self.mut_memory().set_metaversion(&flushed_version)?;
+
         debug_assert!(self.memory().validate_markers());
-        Ok(change.resized())
+        Ok(flushed_version)
     }
 }
 

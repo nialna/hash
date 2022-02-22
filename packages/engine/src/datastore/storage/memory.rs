@@ -1,6 +1,7 @@
 #![allow(clippy::similar_names)]
 
 use std::{env, os::unix::io::RawFd, path::Path};
+use std::intrinsics::size_of;
 
 use shared_memory::{Shmem, ShmemConf};
 
@@ -10,6 +11,8 @@ use super::{
     BufferChange,
 };
 use crate::{datastore::prelude::*, proto::ExperimentId};
+use crate::datastore::arrow::util::DataSliceUtils;
+use crate::datastore::storage::markers::Buffer::Meta;
 
 pub type Buffers<'a> = (&'a [u8], &'a [u8], &'a [u8], &'a [u8]);
 
@@ -250,6 +253,34 @@ impl Memory {
 
     pub fn set_header<K: AsRef<[u8]>>(&mut self, header: &K) -> Result<BufferChange> {
         self.visitor_mut().write_header_buffer(header.as_ref())
+    }
+
+    /// Try to read metaversion from the initial part of the header
+    pub fn get_metaversion(&self) -> Result<Metaversion> {
+        let header = self.get_header()?;
+        let n_header_bytes = header.len();
+        let n_metaversion_bytes = std::mem::size_of::<Metaversion>();
+        if n_header_bytes < n_metaversion_bytes {
+            Err(Error::from("Memory header too small to read metaversion"))
+        } else {
+            let memory_version = u32::from_le_bytes(header[..4] as _);
+            let batch_version = u32::from_le_bytes(header[4..8] as _);
+            Ok(Metaversion::new(memory_version, batch_version)?)
+        }
+    }
+
+    /// Overwrite initial part of header with the given metaversion
+    pub fn set_metaversion(&mut self, metaversion: &Metaversion) -> Result<()> {
+        let header = self.visitor_mut().header_mut();
+        let n_header_bytes = header.len();
+        let n_metaversion_bytes = std::mem::size_of::<Metaversion>();
+        if n_header_bytes < n_metaversion_bytes {
+            Err(Error::from("Memory header too small to write metaversion"))
+        } else {
+            let bytes = metaversion.to_le_bytes();
+            header[..n_metaversion_bytes].copy_from_slice(&bytes);
+            Ok(())
+        }
     }
 
     pub fn get_metadata(&self) -> Result<&[u8]> {

@@ -1,3 +1,7 @@
+// TODO: Rework traits -- some methods are not necessary for some structs
+//       that implement the traits (which results in a trivial/error
+//       implementation).
+
 pub mod agent;
 pub mod boolean;
 pub mod change;
@@ -9,6 +13,7 @@ pub mod message;
 pub mod metaversion;
 pub mod migration;
 
+use tracing::field::debug;
 pub use agent::Batch as AgentBatch;
 pub use context::{AgentIndex, Batch as ContextBatch, MessageIndex};
 pub use dataset::Batch as Dataset;
@@ -27,10 +32,30 @@ use crate::datastore::batch::change::ArrayChange;
 pub trait Batch: Sized {
     fn memory(&self) -> &Memory;
     fn memory_mut(&mut self) -> &mut Memory;
-    fn metaversion(&self) -> &Metaversion;
-    fn metaversion_mut(&mut self) -> &mut Metaversion;
-    fn maybe_reload(&mut self, metaversion: Metaversion) -> Result<()>;
-    fn reload(&mut self) -> Result<()>;
+
+    /// The versions of the batch and memory that are currently
+    /// loaded (in this runtime/process).
+    fn loaded(&self) -> &Metaversion;
+
+    /// The latest batch version and memory version that we have seen
+    /// for this batch (in this experiment as a whole).
+    fn latest_known(&self) -> &Metaversion;
+
+    /// If the given `new_version` is greater than the latest
+    /// known version (whether the batch or memory version),
+    /// mutate the latest known version to be equal to the
+    /// given one (but leave the loaded version unchanged).
+    fn update_latest_known(&mut self, new_version: &Metaversion);
+
+    /// If the latest known metaversion is greater than the loaded
+    /// version (i.e. either the batch version or the memory version
+    /// is strictly greater than the loaded version), then the batch
+    /// and/or memory is reloaded and the loaded version is mutated
+    /// to be the latest known one.
+    // TODO: There is some code duplication between implementations
+    //       of `load_latest_known`, so add a default implementation
+    //       to this trait.
+    fn load_latest_known(&mut self) -> Result<()>;
 
     fn get_batch_id(&self) -> &str {
         self.memory().get_id()
@@ -38,7 +63,7 @@ pub trait Batch: Sized {
 }
 
 pub trait ArrowBatch: Batch {
-    /// Reload the recordbatch
+    /// Reload the record batch
     fn reload_record_batch(&mut self) -> Result<()> {
         debug_assert!(self.memory().validate_markers());
         let rb_msg = load::record_batch_message(self)?;
@@ -51,7 +76,7 @@ pub trait ArrowBatch: Batch {
 }
 
 pub trait DynamicBatch: ArrowBatch {
-    fn push_change(&mut self, change: ArrayChange) -> Result<()>;
+    fn push_change(&mut self, change: ArrayChange, change_version: &Metaversion) -> Result<()>;
     fn flush_changes(&mut self) -> Result<()>;
 
     fn reload_record_batch_and_dynamic_meta(&mut self) -> Result<()> {
@@ -62,34 +87,7 @@ pub trait DynamicBatch: ArrowBatch {
         Ok(())
     }
 
-    fn copy_from_record_batch(&mut self, record_batch: &RecordBatch) -> Result<()> {
-        // Get arrow meta buffer and data length
-        let (meta_buffer, data_len) = simulate_record_batch_to_bytes(record_batch);
-
-        // Ensure that data length is correct
-        let change = &self.memory_mut().set_data_length(data_len)?;
-        self.metaversion_mut().increment_with(change);
-        // Write the metadata
-        self.memory_mut().set_metadata(&meta_buffer)?;
-
-        // Write data_len
-        let data_buffer = self.memory_mut().get_mut_data_buffer()?;
-        // Write new data
-        record_batch_data_to_bytes_owned_unchecked(record_batch, data_buffer);
-        self.reload_record_batch()?;
-        self.metaversion_mut().increment_batch();
-
-        // Reload dynamic meta
-        let batch_message = arrow_ipc::get_root_as_message(meta_buffer.as_ref())
-            .header_as_record_batch()
-            .ok_or_else(|| Error::ArrowBatch("Couldn't read message".into()))?;
-
-        *self.dynamic_meta_mut() = batch_message.into_meta(data_len)?;
-
-        Ok(())
-    }
-
-    fn sync(&mut self, batch: &Self) -> Result<()> {
+    fn sync(&mut self, batch: &Self, metaversion: &Metaversion) -> Result<()> {
         if self.memory().size < batch.memory().size {
             self.memory_mut().resize(batch.memory().size)?;
             self.metaversion_mut().increment();

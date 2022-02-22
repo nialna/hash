@@ -78,8 +78,10 @@ def load_dataset(batch_id):
     (_, _, header_offset, header_size, _, _, data_offset, data_size) = load_markers(mem)
 
     # The header has the shortname of the dataset
-    header_buf = mem[header_offset: header_offset + header_size]
-    dataset_name = str(header_buf.to_pybytes().decode('utf-8'))
+    n_metaversion_bytes = 8  # Memory u32 + batch u32 version
+    name_offset = header_offset + n_metaversion_bytes  # Skip metaversion.
+    name_buf = mem[name_offset: name_offset + header_size]
+    dataset_name = str(name_buf.to_pybytes().decode('utf-8'))
 
     # This data buffer has the dataset as a JSON string
     data_buf = mem[data_offset: data_offset + data_size]

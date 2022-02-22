@@ -10,6 +10,7 @@ use crate::{
     },
     simulation::package::state::StateColumn,
 };
+use crate::datastore::batch::{Batch, Metaversion};
 
 /// An ordered collection of similar [`AgentBatch`]es for each group within a simulation run.
 #[derive(Clone)]
@@ -39,14 +40,28 @@ impl Extend<AgentBatch> for AgentPool {
 }
 
 impl PoolWriteProxy<AgentBatch> {
-    pub fn set_pending_column(&mut self, column: StateColumn) -> Result<()> {
-        let mut index = 0;
+    pub fn modify_loaded_column(
+        &mut self,
+        column: StateColumn
+    ) -> Result<()> {
+        let mut group_start = 0;
         for batch in self.batches_iter_mut() {
             let num_agents = batch.num_agents();
-            let next_index = index + num_agents;
-            let change = column.get_arrow_change(index..next_index)?;
-            batch.push_change(change)?;
-            index = next_index;
+            let next_start = group_start + num_agents;
+            let change = column.get_arrow_change(group_start..next_start)?;
+
+            // The data we write into the agent pool is based on taking
+            // the data currently loaded in the record batches in the pool
+            // and then modifying it, so the batch version should become
+            // newer by one than the loaded version.
+            let change_version = {
+                let mut m = *batch.loaded();
+                m.increment_batch();
+                m
+            };
+
+            batch.push_change(change, &change_version)?;
+            group_start = next_start;
         }
         Ok(())
     }

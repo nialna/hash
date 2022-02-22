@@ -164,7 +164,7 @@ impl BehaviorExecution {
             self.behavior_ids_col_index,
         )?;
 
-        agent_proxies.set_pending_column(behavior_ids)?;
+        agent_proxies.modify_loaded_column(behavior_ids)?;
         Ok(())
     }
 

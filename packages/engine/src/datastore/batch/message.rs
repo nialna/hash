@@ -44,7 +44,8 @@ pub struct Batch {
     static_meta: Arc<StaticMeta>,
     dynamic_meta: DynamicMeta,
     pub changes: Vec<ArrayChange>,
-    metaversion: Metaversion,
+    loaded: Metaversion,
+    latest_known: Metaversion,
 }
 
 impl BatchRepr for Batch {
@@ -56,29 +57,29 @@ impl BatchRepr for Batch {
         &mut self.memory
     }
 
-    fn metaversion(&self) -> &Metaversion {
-        &self.metaversion
+    fn loaded(&self) -> &Metaversion {
+        &self.loaded
     }
 
-    fn metaversion_mut(&mut self) -> &mut Metaversion {
-        &mut self.metaversion
+    fn latest_known(&self) -> &Metaversion {
+        &self.latest_known
     }
 
-    fn maybe_reload(&mut self, state: Metaversion) -> Result<()> {
-        if self.metaversion.memory() != state.memory() {
-            self.reload()?;
-        } else if self.metaversion.batch() != state.batch() {
+    fn update_latest_known(&mut self, new_version: &Metaversion) {
+        self.latest_known.maybe_update(new_version);
+    }
+
+    fn load_latest_known(&mut self) -> Result<()> {
+        if self.loaded.memory() < self.latest_known.memory() {
+            /// Reload the memory (for when ftruncate has been called) and batch
+            self.memory.reload()?;
+            self.reload_record_batch()?;
+        } else if self.loaded.batch() < self.latest_known.batch() {
             self.reload_record_batch()?;
         }
 
-        self.metaversion = state;
+        self.loaded.update_to(&self.latest_known);
         Ok(())
-    }
-
-    /// Reload the memory (for when ftruncate has been called) and batch
-    fn reload(&mut self) -> Result<()> {
-        self.memory.reload()?;
-        self.reload_record_batch()
     }
 }
 
@@ -101,10 +102,15 @@ impl DynamicBatch for Batch {
         &mut self.dynamic_meta
     }
 
-    /// Push an `ArrayChange` into pending list of changes
-    /// NB: These changes are not written into memory if
-    /// `self.flush_changes` is not called.
-    fn push_change(&mut self, change: ArrayChange) -> Result<()> {
+    /// Push an `ArrayChange` into pending list of changes and update latest known metaversion.
+    /// NB: These changes are not written into memory if `self.flush_changes` is not called.
+    fn push_change(&mut self, change: ArrayChange, change_version: &Metaversion) -> Result<()> {
+        if change_version.older_than(&self.latest_known) {
+            return Err(Error::from("Can't push obsolete changes for flushing to memory"));
+        }
+
+        // `change_version` is newer or equal to `latest_known`.
+        self.latest_known = *change_version;
         self.changes.push(change);
         Ok(())
     }
@@ -113,14 +119,19 @@ impl DynamicBatch for Batch {
         let resized = GrowableBatch::flush_changes(self)?;
         // The current `self.batch` is invalid because offset have been changed.
         // need to reload, if we want to keep on using this shared batch instance
+        if resized {
+            self.latest_known.increment();
+        } else {
+            self.latest_known.increment_batch();
+        }
+
+        self.load_latest_known()?;
+
+
         self.reload_record_batch_and_dynamic_meta()?;
 
         // Update reload state (metaversion)
-        if resized {
-            self.metaversion.increment();
-        } else {
-            self.metaversion.increment_batch();
-        }
+
         Ok(())
     }
 }

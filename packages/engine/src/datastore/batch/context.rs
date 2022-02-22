@@ -28,8 +28,8 @@ pub type MessageIndex = (u32, u32, u32);
 
 pub struct Batch {
     pub(crate) memory: Memory,
-    pub(crate) metaversion: Metaversion,
     pub(crate) batch: RecordBatch,
+    loaded: Metaversion,
 }
 
 impl BatchRepr for Batch {
@@ -41,20 +41,20 @@ impl BatchRepr for Batch {
         &mut self.memory
     }
 
-    fn metaversion(&self) -> &Metaversion {
-        &self.metaversion
+    fn loaded(&self) -> &Metaversion {
+        &self.loaded
     }
 
-    fn metaversion_mut(&mut self) -> &mut Metaversion {
-        &mut self.metaversion
+    fn latest_known(&self) -> &Metaversion {
+        &self.loaded // Since the latest known version can't be updated for the context batch
     }
 
-    fn maybe_reload(&mut self, _metaversion: Metaversion) -> Result<()> {
-        Err(Error::from("`maybe_reload` is not implemented"))
+    fn update_latest_known(&mut self, _new_version: &Metaversion) {
+        panic!("`update_latest_known` is not implemented for context batch")
     }
 
-    fn reload(&mut self) -> Result<()> {
-        Err(Error::from("`reload` is not implemented"))
+    fn load_latest_known(&mut self) -> Result<()> {
+        Err(Error::from("`load_latest_known` is not implemented for context batch"))
     }
 }
 
