@@ -278,13 +278,14 @@ export class PostgresAdapter extends DataSource implements DBAdapter {
     return this.query((adapter) => adapter.deleteLink(params));
   }
 
-  getEntityOutgoingLinks(params: {
+  getEntityActiveOutgoingLinks(params: {
     accountId: string;
     entityId: string;
-    entityVersionId?: string;
     path?: string;
   }): Promise<DBLink[]> {
-    return this.query((adapter) => adapter.getEntityOutgoingLinks(params));
+    return this.query((adapter) =>
+      adapter.getEntityActiveOutgoingLinks(params),
+    );
   }
 
   createAggregation(

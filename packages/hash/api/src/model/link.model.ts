@@ -56,11 +56,13 @@ type LinkConstructorArgs = {
   index?: number;
   sourceAccountId: string;
   sourceEntityId: string;
-  sourceEntityVersionIds: Set<string>;
+  appliedToSourceAt: Date;
+  appliedToSourceBy: string;
+  removedFromSourceAt?: Date;
+  removedFromSourceBy?: string;
   destinationAccountId: string;
   destinationEntityId: string;
   destinationEntityVersionId?: string;
-  createdAt: Date;
 };
 
 class __Link {
@@ -71,13 +73,15 @@ class __Link {
 
   sourceAccountId: string;
   sourceEntityId: string;
-  sourceEntityVersionIds: Set<string>;
+
+  appliedToSourceAt: Date;
+  appliedToSourceBy: string;
+  removedFromSourceAt?: Date;
+  removedFromSourceBy?: string;
 
   destinationAccountId: string;
   destinationEntityId: string;
   destinationEntityVersionId?: string;
-
-  createdAt: Date;
 
   constructor({
     linkId,
@@ -85,11 +89,13 @@ class __Link {
     index,
     sourceAccountId,
     sourceEntityId,
-    sourceEntityVersionIds,
+    appliedToSourceAt,
+    appliedToSourceBy,
+    removedFromSourceAt,
+    removedFromSourceBy,
     destinationAccountId,
     destinationEntityId,
     destinationEntityVersionId,
-    createdAt,
   }: LinkConstructorArgs) {
     this.linkId = linkId;
     this.stringifiedPath = path;
@@ -97,11 +103,13 @@ class __Link {
     this.index = index;
     this.sourceAccountId = sourceAccountId;
     this.sourceEntityId = sourceEntityId;
-    this.sourceEntityVersionIds = sourceEntityVersionIds;
+    this.appliedToSourceAt = appliedToSourceAt;
+    this.appliedToSourceBy = appliedToSourceBy;
+    this.removedFromSourceAt = removedFromSourceAt;
+    this.removedFromSourceBy = removedFromSourceBy;
     this.destinationAccountId = destinationAccountId;
     this.destinationEntityId = destinationEntityId;
     this.destinationEntityVersionId = destinationEntityVersionId;
-    this.createdAt = createdAt;
   }
 
   static isPathValid(path: string): boolean {

@@ -407,7 +407,7 @@ class __Entity {
     return aggregation;
   }
 
-  async getOutgoingLinks(
+  async getActiveOutgoingLinks(
     client: DBClient,
     params?: {
       stringifiedPath?: string;
@@ -416,14 +416,12 @@ class __Entity {
   ) {
     const { stringifiedPath, path } = params || {};
 
-    const outgoingDBLinks = await client.getEntityOutgoingLinks({
+    const outgoingDBLinks = await client.getEntityActiveOutgoingLinks({
       accountId: this.accountId,
       entityId: this.entityId,
-      entityVersionId: this.metadata.versioned
-        ? this.entityVersionId
-        : undefined,
       path: stringifiedPath ?? (path ? Link.stringifyPath(path) : undefined),
     });
+
     return outgoingDBLinks.map((dbLink) => new Link(dbLink));
   }
 

@@ -2,16 +2,13 @@ import { sql } from "slonik";
 
 import { Connection } from "../types";
 import { DBLink } from "../../adapter";
-import {
-  acquireEntityLock,
-  getEntityLatestVersion,
-  updateVersionedEntity,
-} from "../entity";
+import { acquireEntityLock, getEntityLatestVersion } from "../entity";
 import { DbEntityNotFoundError } from "../..";
 import { genId } from "../../../util";
 import {
   getLinksWithMinimumIndex,
   insertLink,
+  removeLinkFromSource,
   updateLinkIndices,
 } from "./util";
 import { requireTransaction } from "../util";
@@ -41,11 +38,17 @@ export const createLink = async (
       deferred
     `);
 
-    const { sourceAccountId, sourceEntityId } = params;
+    const { sourceAccountId, sourceEntityId, createdByAccountId } = params;
 
-    await acquireEntityLock(conn, { entityId: sourceEntityId });
+    const linkId = genId();
+    const appliedToSourceAt = now;
+    const appliedToSourceBy = createdByAccountId;
 
-    let dbSourceEntity = await getEntityLatestVersion(conn, {
+    await acquireEntityLock(conn, {
+      entityId: sourceEntityId,
+    });
+
+    const dbSourceEntity = await getEntityLatestVersion(conn, {
       accountId: sourceAccountId,
       entityId: sourceEntityId,
     }).then((dbEntity) => {
@@ -58,7 +61,7 @@ export const createLink = async (
       return dbEntity;
     });
 
-    const { index, path, createdByAccountId } = params;
+    const { index, path } = params;
     /** @todo: check index isn't out of bounds */
 
     if (dbSourceEntity.metadata.versioned) {
@@ -84,29 +87,24 @@ export const createLink = async (
             })
           : [];
 
-      dbSourceEntity = await updateVersionedEntity(conn, {
-        entity: dbSourceEntity,
-        updatedByAccountId: createdByAccountId,
-        /** @todo: re-implement method to not require updated `properties` */
-        properties: dbSourceEntity.properties,
-        /**
-         * When the new link is indexed, we have to omit all links whose index
-         * have to be changed from the new entity version
-         */
-        omittedOutgoingLinks: affectedOutgoingLinks,
-      });
-
       if (index !== undefined) {
         /** @todo: implement insertLinks and use that instead of many insertLink queries */
 
         for (const previousLink of affectedOutgoingLinks) {
           promises.push(
+            removeLinkFromSource(conn, {
+              ...previousLink,
+              removedFromSourceAt: now,
+              removedFromSourceBy: createdByAccountId,
+            }),
+          );
+          promises.push(
             insertLink(conn, {
               ...previousLink,
               linkId: genId(),
               index: previousLink.index! + 1,
-              sourceEntityVersionIds: new Set([dbSourceEntity.entityVersionId]),
-              createdAt: now,
+              appliedToSourceAt: now,
+              appliedToSourceBy,
             }),
           );
         }
@@ -130,22 +128,16 @@ export const createLink = async (
       );
     }
 
-    const linkId = genId();
-    const sourceEntityVersionIds: Set<string> = new Set([
-      dbSourceEntity.entityVersionId,
-    ]);
-    const createdAt = now;
-
     promises.push(
       insertLink(conn, {
         ...params,
-        sourceEntityVersionIds,
+        appliedToSourceAt,
+        appliedToSourceBy,
         linkId,
-        createdAt,
       }),
     );
 
     await Promise.all(promises);
 
-    return { ...params, sourceEntityVersionIds, linkId, createdAt };
+    return { ...params, linkId, appliedToSourceAt, appliedToSourceBy };
   });

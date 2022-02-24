@@ -167,7 +167,8 @@ export const getImpliedEntityHistory = async (
             accountId: link.sourceAccountId,
             entityId: link.sourceEntityId,
             entityVersionId: link.destinationEntityVersionId,
-            validForSourceEntityVersionIds: link.sourceEntityVersionIds,
+            validForSourceEntityVersionIds: (link as any)
+              .sourceEntityVersionIds,
           }),
         ),
       ),

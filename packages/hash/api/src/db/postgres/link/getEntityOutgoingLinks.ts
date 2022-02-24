@@ -12,8 +12,7 @@ import {
 } from "../entity";
 
 import { Connection } from "../types";
-import { mapColumnNamesToSQL } from "../util";
-import { DBLinkRow, linksColumnNames, mapDBLinkRowToDBLink } from "./util";
+import { getActiveLinks } from "./util";
 
 export type EntityWithOutgoingEntityIdsPGRow = EntityPGRow & {
   outgoing_entity_ids: string[];
@@ -27,34 +26,21 @@ export const mapEntityWithOutgoingEntityIdsPGRowToEntity = (
   outgoingEntityIds: row.outgoing_entity_ids,
 });
 
-export const getEntityOutgoingLinks = async (
+export const getEntityActiveOutgoingLinks = async (
   conn: Connection,
   params: {
     accountId: string;
     entityId: string;
-    entityVersionId?: string;
     path?: string;
   },
 ) => {
-  const rows = await conn.any(sql<DBLinkRow>`
-    select ${mapColumnNamesToSQL(linksColumnNames)}
-    from links
-    where
-    ${sql.join(
-      [
-        sql`source_account_id = ${params.accountId}`,
-        sql`source_entity_id = ${params.entityId}`,
-        params.entityVersionId !== undefined
-          ? sql`${params.entityVersionId} = ANY(source_entity_version_ids)`
-          : [],
-        params.path !== undefined ? sql`path = ${params.path}` : [],
-      ].flat(),
-      sql` and `,
-    )}
-    order by index
-  `);
+  const dbLinks = await getActiveLinks(conn, {
+    sourceAccountId: params.accountId,
+    sourceEntityId: params.entityId,
+    path: params.path,
+  });
 
-  return rows.map(mapDBLinkRowToDBLink);
+  return dbLinks;
 };
 
 const outgoingLinkAggregationQuery = sql`

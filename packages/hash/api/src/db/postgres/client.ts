@@ -53,7 +53,7 @@ import {
 } from "./entity";
 import {
   getEntitiesByTypeWithOutgoingEntityIds,
-  getEntityOutgoingLinks,
+  getEntityActiveOutgoingLinks,
   getEntityWithOutgoingEntityIds,
 } from "./link/getEntityOutgoingLinks";
 import { getLink, getLinkByEntityId } from "./link/getLink";
@@ -559,13 +559,12 @@ export class PostgresClient implements DBClient {
     return await deleteAggregation(this.conn, params);
   }
 
-  async getEntityOutgoingLinks(params: {
+  async getEntityActiveOutgoingLinks(params: {
     accountId: string;
     entityId: string;
-    entityVersionId?: string;
     path?: string;
   }): Promise<DBLink[]> {
-    return await getEntityOutgoingLinks(this.conn, params);
+    return await getEntityActiveOutgoingLinks(this.conn, params);
   }
 
   async createVerificationCode(params: {

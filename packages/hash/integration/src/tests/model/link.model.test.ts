@@ -196,12 +196,11 @@ describe("Link model class ", () => {
 
     expect(retrievedLink).not.toBeNull();
     expect(retrievedLink.linkId).toBe(link.linkId);
-    expect(retrievedLink.createdAt).toEqual(link.createdAt);
+
+    expect(retrievedLink.appliedToSourceAt).toEqual(link.appliedToSourceAt);
+
     expect(retrievedLink.sourceAccountId).toBe(link.sourceAccountId);
     expect(retrievedLink.sourceEntityId).toBe(link.sourceEntityId);
-    expect(retrievedLink.sourceEntityVersionIds).toEqual(
-      link.sourceEntityVersionIds,
-    );
     expect(retrievedLink.destinationAccountId).toBe(link.destinationAccountId);
     expect(retrievedLink.destinationEntityId).toBe(link.destinationEntityId);
     expect(retrievedLink.destinationEntityVersionId).toBe(

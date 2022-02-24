@@ -60,11 +60,13 @@ export type DBLink = {
   index?: number;
   sourceAccountId: string;
   sourceEntityId: string;
-  sourceEntityVersionIds: Set<string>;
+  appliedToSourceAt: Date;
+  appliedToSourceBy: string;
+  removedFromSourceAt?: Date;
+  removedFromSourceBy?: string;
   destinationAccountId: string;
   destinationEntityId: string;
   destinationEntityVersionId?: string;
-  createdAt: Date;
 };
 
 export type DBAggregation = {
@@ -454,10 +456,9 @@ export interface DBClient {
     linkId: string;
   }): Promise<void>;
 
-  getEntityOutgoingLinks(params: {
+  getEntityActiveOutgoingLinks(params: {
     accountId: string;
     entityId: string;
-    entityVersionId?: string;
     path?: string;
   }): Promise<DBLink[]>;
 

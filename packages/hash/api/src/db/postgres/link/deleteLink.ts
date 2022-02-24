@@ -1,9 +1,5 @@
 import { Connection } from "../types";
-import {
-  acquireEntityLock,
-  getEntityLatestVersion,
-  updateVersionedEntity,
-} from "../entity";
+import { acquireEntityLock, getEntityLatestVersion } from "../entity";
 import { DbEntityNotFoundError, DbLinkNotFoundError } from "../..";
 import { genId } from "../../../util";
 import { getLink } from "./getLink";
@@ -11,6 +7,7 @@ import {
   deleteLinkRow,
   getLinksWithMinimumIndex,
   insertLink,
+  removeLinkFromSource,
   updateLinkIndices,
 } from "./util";
 import { requireTransaction } from "../util";
@@ -24,17 +21,21 @@ export const deleteLink = async (
   },
 ): Promise<void> =>
   requireTransaction(existingConnection)(async (conn) => {
-    const dbLink = await getLink(conn, params);
+    const { sourceAccountId, linkId } = params;
+
+    const dbLink = await getLink(conn, { sourceAccountId, linkId });
+
+    const now = new Date();
 
     if (!dbLink) {
       throw new DbLinkNotFoundError(params);
     }
 
-    const { sourceAccountId, sourceEntityId, path, index } = dbLink;
+    const { sourceEntityId, path, index } = dbLink;
 
     await acquireEntityLock(conn, { entityId: sourceEntityId });
 
-    let dbSourceEntity = await getEntityLatestVersion(conn, {
+    const dbSourceEntity = await getEntityLatestVersion(conn, {
       accountId: sourceAccountId,
       entityId: sourceEntityId,
     }).then((dbEntity) => {
@@ -47,6 +48,8 @@ export const deleteLink = async (
 
       return dbEntity;
     });
+
+    const promises: Promise<void>[] = [];
 
     if (dbSourceEntity.metadata.versioned) {
       /**
@@ -73,52 +76,50 @@ export const deleteLink = async (
 
       const { deletedByAccountId } = params;
 
-      dbSourceEntity = await updateVersionedEntity(conn, {
-        entity: dbSourceEntity,
-        /** @todo: re-implement method to not require updated `properties` */
-        properties: dbSourceEntity.properties,
-        updatedByAccountId: deletedByAccountId,
-        omittedOutgoingLinks: [
-          ...affectedOutgoingLinks,
-          { sourceAccountId, linkId: params.linkId },
-        ],
-      });
+      promises.push(
+        removeLinkFromSource(conn, {
+          sourceAccountId,
+          linkId,
+          removedFromSourceAt: now,
+          removedFromSourceBy: deletedByAccountId,
+        }),
+      );
 
       if (index !== undefined) {
-        /** @todo: implement insertLinks and use that instead of many insertLink queries */
-        const now = new Date();
-
-        await Promise.all(
-          affectedOutgoingLinks
-            .map((previousLink) => {
-              const linkId = genId();
-              return insertLink(conn, {
+        promises.push(
+          ...affectedOutgoingLinks
+            .map((previousLink) => [
+              removeLinkFromSource(conn, {
                 ...previousLink,
-                linkId,
+                removedFromSourceAt: now,
+                removedFromSourceBy: deletedByAccountId,
+              }),
+              insertLink(conn, {
+                ...previousLink,
+                linkId: genId(),
                 index: previousLink.index! - 1,
-                sourceEntityVersionIds: new Set([
-                  dbSourceEntity.entityVersionId,
-                ]),
-                createdAt: now,
-              });
-            })
+                appliedToSourceAt: now,
+                appliedToSourceBy: deletedByAccountId,
+              }),
+            ])
             .flat(),
         );
       }
     } else {
-      await Promise.all(
-        [
-          index !== undefined
-            ? updateLinkIndices(conn, {
-                sourceAccountId,
-                sourceEntityId,
-                path,
-                minimumIndex: index + 1,
-                operation: "decrement",
-              })
-            : [],
-          deleteLinkRow(conn, params),
-        ].flat(),
-      );
+      promises.push(deleteLinkRow(conn, params));
+
+      if (index !== undefined) {
+        promises.push(
+          updateLinkIndices(conn, {
+            sourceAccountId,
+            sourceEntityId,
+            path,
+            minimumIndex: index + 1,
+            operation: "decrement",
+          }),
+        );
+      }
     }
+
+    await Promise.all(promises);
   });
