@@ -79,7 +79,7 @@
   };
 
   const _vector_to_array = (vector) => {
-    // TODO: This function is called often enough that it
+    // TODO: OPTIM: This function is called often enough that it
     //       might be worth benchmarking and micro-optimizing.
     if (!vector || typeof vector.toArray === "undefined") {
       return vector; // `vector` isn't actually a vector.
@@ -100,13 +100,26 @@
       const children = vector.type.children;
       if (!children) return shallow;
 
+      throw new Error(children);
       if (_is_primitive_or_list(children)) {
+        if (vector.name === "b1") {
+          throw new Error(`
+     ${vector.constructor?.name}
+     ${vector.type}
+     ${JSON.stringify(vector)}
+     ${vector}
+     ${children}
+             `);
+        }
         // Primitive (strings, numbers) or list
         // `!!field.type.listSize` --> fixed-size list.
         for (var i = 0; i < shallow.length; ++i) {
           deep[i] = _vector_to_array(shallow[i]);
         }
       } else {
+        if (vector.name === "b1") {
+          throw new Error("THIS SHOULDN'T HAPPEN");
+        }
         // Struct array (we don't use Arrow's union arrays)
         for (var i = 0; i < shallow.length; ++i) {
           deep[i] = _struct_vec_to_obj(shallow[i], children);

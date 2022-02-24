@@ -146,6 +146,9 @@
       // only agent-scoped fields are fully loaded by default
       col = hash_util.load_shallow(vector);
     } else {
+      if (name === "b1") {
+        vector.name = "b1";
+      }
       col = hash_util.load_full(vector);
     }
     return (this.cols[name] = col);
